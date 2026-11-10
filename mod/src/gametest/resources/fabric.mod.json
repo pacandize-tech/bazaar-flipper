@@ -1,0 +1,15 @@
+{
+	"schemaVersion": 1,
+	"id": "bazaarflipper-test",
+	"version": "1.0.0",
+	"name": "Bazaar Flipper Tests",
+	"environment": "client",
+	"entrypoints": {
+		"fabric-client-gametest": [
+			"com.bazaarflipper.test.BazaarFlipperClientGameTest"
+		]
+	},
+	"depends": {
+		"bazaarflipper": "*"
+	}
+}

@@ -3,7 +3,7 @@
 	"id": "bazaarflipper",
 	"version": "${version}",
 	"name": "Bazaar Flipper Alerts",
-	"description": "Shows Bazaar flip alerts from flipper.py (running on your PC) in your chat. Display only: it never clicks, opens menus or places orders.",
+	"description": "Pings you in chat with Hypixel SkyBlock Bazaar flips: exact buy order and sell offer prices, quantity and profit after tax. Alerts only: it never clicks, opens menus or places orders.",
 	"authors": [
 		"isaac"
 	],
@@ -16,8 +16,12 @@
 	},
 	"depends": {
 		"fabricloader": ">=0.20.1",
-		"minecraft": "~26.3",
+		"minecraft": "~26.1.2",
 		"java": ">=25",
 		"fabric-api": "*"
+	},
+	"contact": {
+		"sources": "https://github.com/pacandize-tech/bazaar-flipper",
+		"issues": "https://github.com/pacandize-tech/bazaar-flipper/issues"
 	}
 }

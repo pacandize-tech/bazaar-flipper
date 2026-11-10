@@ -8,8 +8,8 @@ out which items have a spread worth flipping after tax, and tells you:
   * the sell offer price to set (lowest sell offer - 0.1)
   * how many to buy and the expected profit
 
-Alerts go to the console, to the in-game chat through the companion Fabric
-mod (it reads them from http://127.0.0.1:<port>), and optionally to Discord.
+Alerts go to the console and, optionally, to Discord. For alerts in your
+Minecraft chat, use the Fabric mod in mod/ instead (it works on its own).
 
 It NEVER places orders or touches the game. You do the clicking, so it stays
 within Hypixel's rules.
@@ -25,14 +25,12 @@ import os
 import re
 import statistics
 import sys
-import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BAZAAR_URL = "https://api.hypixel.net/v2/skyblock/bazaar"
 ITEMS_URL = "https://api.hypixel.net/v2/resources/skyblock/items"
@@ -46,10 +44,10 @@ MIN_POLL_SECONDS = 20      # Hypixel only refreshes the Bazaar about every 20s
 MAX_ORDER_AMOUNT = 71680   # Bazaar limit per order
 HOURS_PER_WEEK = 168
 COFL_CACHE_SECONDS = 20 * 60
-ALERT_KEEP_SECONDS = 10 * 60  # how long the mod can still pick up an alert
+UNCHANGED_RETRY_SECONDS = 5  # snapshot not refreshed yet: look again soon
 
 DEFAULTS = {
-    "poll_seconds": 60,
+    "poll_seconds": 20,
     "budget": 100_000_000,
     "max_coins_per_flip": 25_000_000,
     "min_profit_per_flip": 300_000,
@@ -64,7 +62,6 @@ DEFAULTS = {
     "use_coflnet": True,
     "blacklist": [],
     "discord_webhook": "",
-    "mod_port": 8765,
     "beep": False,
 }
 
@@ -86,6 +83,9 @@ def coins(n):
 
 # ---------------------------------------------------------------- config
 
+_warned_unknown = set()
+
+
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -95,7 +95,9 @@ def load_config():
     with open(CONFIG_PATH, encoding="utf-8") as f:
         user = json.load(f)
     unknown = set(user) - set(DEFAULTS)
-    if unknown:
+    if unknown and unknown != _warned_unknown:
+        _warned_unknown.clear()
+        _warned_unknown.update(unknown)
         log(f"Ignoring unknown setting(s) in config.json: {', '.join(sorted(unknown))}")
     cfg = {**DEFAULTS, **{k: v for k, v in user.items() if k in DEFAULTS}}
     cfg["poll_seconds"] = max(cfg["poll_seconds"], MIN_POLL_SECONDS)
@@ -285,64 +287,6 @@ def find_flips(products, cfg, names, history):
 
 # ---------------------------------------------------------------- alerts
 
-class AlertFeed:
-    """Holds recent alerts for the in-game mod, which polls /alerts."""
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.alerts = []
-        self.current = []
-        self.next_id = 1
-
-    def add(self, flip):
-        with self.lock:
-            self.alerts.append({**flip, "id": self.next_id, "time": time.time()})
-            self.next_id += 1
-            cutoff = time.time() - ALERT_KEEP_SECONDS
-            self.alerts = [a for a in self.alerts if a["time"] >= cutoff]
-
-    def set_current(self, flips):
-        with self.lock:
-            self.current = list(flips)
-
-    def since(self, after):
-        with self.lock:
-            return [a for a in self.alerts if a["id"] > after]
-
-
-def start_mod_server(feed, port):
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            url = urllib.parse.urlparse(self.path)
-            if url.path == "/alerts":
-                qs = urllib.parse.parse_qs(url.query)
-                try:
-                    after = int(qs.get("after", ["0"])[0])
-                except ValueError:
-                    after = 0
-                body = {"alerts": feed.since(after)}
-            elif url.path == "/flips":
-                with feed.lock:
-                    body = {"flips": feed.current}
-            else:
-                self.send_error(404)
-                return
-            data = json.dumps(body).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def log_message(self, *args):
-            pass
-
-    # 127.0.0.1 only: nothing outside this PC can reach it.
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
-
-
 def format_flip(f):
     lines = [
         f"{f['name']}  (+{coins(f['profit_total'])} profit, {f['margin_percent']}% margin)",
@@ -396,14 +340,6 @@ def should_alert(flip, last_alerted, cfg):
 
 def run(once=False):
     cfg = load_config()
-    feed = AlertFeed()
-    try:
-        start_mod_server(feed, cfg["mod_port"])
-        log(f"In-game mod feed on http://127.0.0.1:{cfg['mod_port']}/alerts")
-    except OSError as e:
-        log(f"Couldn't open port {cfg['mod_port']} for the in-game mod ({e}). "
-            "Is another copy already running? Continuing with console/Discord only.")
-
     names = load_names()
     history = History(cfg["use_coflnet"])
     last_alerted = {}
@@ -416,21 +352,21 @@ def run(once=False):
                 cfg = load_config()
             except json.JSONDecodeError as e:
                 log(f"config.json has a typo ({e}); keeping the previous settings.")
+        changed = True  # on errors, wait the full interval
         try:
             data = get_json(BAZAAR_URL)
             if not data.get("success"):
                 raise ValueError(data.get("cause", "API said success=false"))
-            if data["lastUpdated"] != last_updated:
+            changed = data["lastUpdated"] != last_updated
+            if changed:
                 last_updated = data["lastUpdated"]
                 flips = find_flips(data["products"], cfg, names, history)
-                feed.set_current(flips)
                 new = [f for f in flips if should_alert(f, last_alerted, cfg)]
                 if new:
                     print()
                     log(f"{len(new)} flip(s) worth doing:")
                     for f in new:
                         print(format_flip(f), flush=True)
-                        feed.add(f)
                         last_alerted[f["product"]] = (time.time(), f["buy_price"], f["sell_price"])
                     if cfg["discord_webhook"]:
                         send_discord(cfg["discord_webhook"], new)
@@ -443,7 +379,7 @@ def run(once=False):
             log(f"Bazaar fetch failed: {e}. Retrying next poll.")
         if once:
             return
-        time.sleep(cfg["poll_seconds"])
+        time.sleep(cfg["poll_seconds"] if changed else UNCHANGED_RETRY_SECONDS)
 
 
 def main():
