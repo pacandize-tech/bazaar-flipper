@@ -1,0 +1,23 @@
+{
+	"schemaVersion": 1,
+	"id": "bazaarflipper",
+	"version": "${version}",
+	"name": "Bazaar Flipper Alerts",
+	"description": "Shows Bazaar flip alerts from flipper.py (running on your PC) in your chat. Display only: it never clicks, opens menus or places orders.",
+	"authors": [
+		"isaac"
+	],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.bazaarflipper.BazaarFlipper"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

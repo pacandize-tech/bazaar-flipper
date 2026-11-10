@@ -1,0 +1,5 @@
+# your settings (may contain your Discord webhook)
+config.json
+
+__pycache__/
+*.pyc
